@@ -1,7 +1,7 @@
 package client
 
 import (
-	"encoding/json"
+	"encoding/gob"
 	"fmt"
 	"net"
 	"strconv"
@@ -10,34 +10,46 @@ import (
 
 type management interface {
 	Connect() bool
-	Receive(string) bool
+	DefaultSend(string) bool
 	Disconnect() bool
+	IsOpen() (bool, error)
 }
 
 type Client struct {
-	Port       int
-	Host       string
-	connection net.Conn
-	Error      error
+	Port  int
+	Host  string
+	Conn  net.Conn
+	Error error
 }
 
 const NetworkType string = "tcp"
 
 func (c *Client) Connect() bool {
-	c.connection, c.Error = net.Dial(NetworkType, strings.Join([]string{c.Host, ":", strconv.Itoa(c.Port)}, ""))
+	c.Conn, c.Error = net.Dial(NetworkType, strings.Join([]string{c.Host, ":", strconv.Itoa(c.Port)}, ""))
 	return c.Error == nil
 }
 
-func (c *Client) Receive(message string) bool {
-	err := json.NewEncoder(c.connection).Encode(message)
+func (c *Client) DefaultSend(message string) bool {
+	err := gob.NewEncoder(c.Conn).Encode(message)
 	if err != nil {
-		fmt.Println("ERROR: ", err)
+		fmt.Println("Error: ", err)
 		return false
 	}
 	return true
 }
 
 func (c *Client) Disconnect() bool {
-	c.Error = c.connection.Close()
+	c.Error = c.Conn.Close()
 	return c.Error == nil
+}
+
+func (c *Client) IsOpen() (bool, error) {
+
+	conn, err := net.Dial(NetworkType, strings.Join([]string{c.Host, ":", strconv.Itoa(c.Port)}, ""))
+	defer func() {
+		if err == nil {
+			conn.Close()
+		}
+	}()
+	return err == nil, err
 }
