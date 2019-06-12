@@ -1,66 +1,83 @@
 package server
 
 import (
-	"encoding/json"
+	"encoding/gob"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
 )
 
 type management interface {
-	Start(chan<- bool, <-chan bool)
-	stop()
-	handleConnection()
+	Start(chan<- bool)
+	Stop()
 }
 
 type Server struct {
-	Port     int
-	Host     string
-	listener net.Listener
-	Error    error
+	Port           int
+	Host           string
+	listener       net.Listener
+	exited         bool
+	Error          error
+	MaxSizeBuffer  int64
+	ProcessingFunc func(*Connection)
 }
 
 type Connection struct {
-	conn net.Conn
+	Conn       net.Conn
+	SizeBuffer int64
+	AtHost     string
+	AtPort     int
 }
 
-func (s *Server) Start(result chan<- bool, isStopped <-chan bool) {
-	s.listener, s.Error = net.Listen("tcp", strings.Join([]string{":", strconv.Itoa(s.Port)}, ""))
+const defaultBuffer int64 = 1800
+const NetworkType string = "tcp"
+
+func (s *Server) Start(result chan<- bool) {
+	// size buffer
+	if s.MaxSizeBuffer == 0 {
+		fmt.Println(strings.Join([]string{"MaxSizeBuffer = 0. Using ", strconv.FormatInt(defaultBuffer, 10), " by default."}, ""))
+		s.MaxSizeBuffer = defaultBuffer
+	}
+	// processing function
+	if s.ProcessingFunc == nil {
+		fmt.Println("ProcessingFunc is null. Using encoding/god by default.")
+		s.ProcessingFunc = defaultProcessingFunc
+	}
+	fmt.Println(strings.Join([]string{"Server was running at '", s.Host, ":", strconv.Itoa(s.Port), "'."}, ""))
+	s.listener, s.Error = net.Listen(NetworkType, strings.Join([]string{":", strconv.Itoa(s.Port)}, ""))
 	if s.Error == nil {
 		result <- true
+		s.exited = false
 		for {
-			select {
-			case cancel := <-isStopped:
-				if cancel {
-					s.stop()
+			c, err := s.listener.Accept()
+			if err != nil {
+				if s.exited {
 					break
 				}
-			default:
-				c, err := s.listener.Accept()
-				if err != nil {
-					continue
-				}
-				Connection.handleConnection(Connection{conn: c})
+				fmt.Println("Accept connection failed! What: ", err)
+				continue
 			}
+			con := Connection{Conn: c, SizeBuffer: s.MaxSizeBuffer, AtHost: s.Host, AtPort: s.Port}
+			s.ProcessingFunc(&con)
+			con.Conn.Close()
 		}
 	} else {
 		result <- false
-		s.stop()
+		s.exited = true
 	}
 }
 
-func (s *Server) stop() {
+func (s *Server) Stop() {
+	fmt.Print("Stopping server...")
+	s.exited = true
 	s.Error = s.listener.Close()
+	fmt.Print("Done!\n")
 }
 
-func (c Connection) handleConnection() {
+func defaultProcessingFunc(c *Connection) {
 	var msg string
-	err := json.NewDecoder(c.conn).Decode(&msg)
-	if err != nil {
-		fmt.Println("ERROR: ", err)
-	} else {
-		fmt.Println("Message: ", msg)
-	}
-	c.conn.Close()
+	err := gob.NewDecoder(&io.LimitedReader{R: c.Conn, N: c.SizeBuffer}).Decode(&msg)
+	fmt.Println("(Server) -> Message: '", msg, "' Error: ", err)
 }
